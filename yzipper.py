@@ -160,21 +160,29 @@ def path_coiled(
     n: int,
     r_h: float = 6.0,
     n_turns: float = 2.5,
-) -> tuple[list, list]:
+    strip_len: float = STRIP_LEN,
+) -> tuple[list, list, list]:
     """
     Helical (coiled spring) path.
-    r_h     – helix radius in mm
-    n_turns – number of complete 360° turns
-    Height per turn is computed so that the total arc length ≈ STRIP_LEN.
+    r_h       – helix radius in mm.  Must satisfy r_h < strip_len/(2π·n_turns).
+    n_turns   – number of complete 360° turns.
+    Returns (positions, tangents, up_hints) where up_hints are the radial
+    outward directions — keeps module faces oriented correctly along the coil.
     """
+    r_max = strip_len / (2.0 * pi * n_turns)
+    if r_h >= r_max:
+        raise ValueError(
+            f"r_h={r_h:.1f} mm too large for {n_turns} turns over {strip_len:.0f} mm. "
+            f"Max radius = {r_max:.2f} mm."
+        )
+
     circ       = 2.0 * pi * r_h
-    len_needed = STRIP_LEN / n_turns        # arc-length contribution per turn
-    h2         = max(0.0, len_needed ** 2 - circ ** 2)
-    h_turn     = sqrt(h2)                   # vertical rise per turn
+    len_needed = strip_len / n_turns
+    h_turn     = sqrt(len_needed ** 2 - circ ** 2)   # vertical rise per turn
 
     total_angle = n_turns * 2.0 * pi
 
-    pos, tang = [], []
+    pos, tang, up_hints = [], [], []
     for i in range(n):
         frac  = i / max(n - 1, 1)
         angle = frac * total_angle
@@ -183,13 +191,14 @@ def path_coiled(
             r_h * sin(angle),
             frac * n_turns * h_turn,
         ]))
-        # analytical helix tangent (unnormalized → normalised below)
         dx = -r_h * total_angle * sin(angle)
         dy =  r_h * total_angle * cos(angle)
         dz =  n_turns * h_turn
         tv = np.array([dx, dy, dz])
         tang.append(tv / np.linalg.norm(tv))
-    return pos, tang
+        # radial outward → keeps module flat-face perpendicular to helix axis
+        up_hints.append(np.array([cos(angle), sin(angle), 0.0]))
+    return pos, tang, up_hints
 
 
 def path_twisted(n: int, twist_total_deg: float = 360.0) -> tuple[list, list, list]:
@@ -454,8 +463,8 @@ def _build_variant(cfg: dict) -> tuple[list, list, list | None]:
         pos, tang = path_bent(N_MOD, cfg["bend_deg"])
         return pos, tang, None
     if prim == "coiled":
-        pos, tang = path_coiled(N_MOD, r_h=6.0, n_turns=2.5)
-        return pos, tang, None
+        pos, tang, hints = path_coiled(N_MOD, r_h=6.0, n_turns=2.5)
+        return pos, tang, hints
     if prim == "twisted":
         pos, tang, hints = path_twisted(N_MOD)
         return pos, tang, hints
